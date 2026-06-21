@@ -1,0 +1,59 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'   # запускать при пуше тегов вида v1.0, v0.1.0 и т.д.
+
+jobs:
+  build-linux:
+    runs-on: debian-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: connradar-linux-x86_64
+          path: target/release/connradar
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: connradar-windows-x86_64
+          path: target/release/connradar.exe
+
+  create-release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: connradar-linux-x86_64
+          path: artifacts/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: connradar-windows-x86_64
+          path: artifacts/windows
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/linux/connradar
+            artifacts/windows/connradar.exe
+          body: "Автоматически собранный релиз ConnRadar."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
