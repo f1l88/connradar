@@ -12,7 +12,6 @@
 - **🚨 Instant Alerts** — console and file notifications when connections appear or vanish
 - **📊 Periodic Reports** — exports a human‑readable summary of current statistics
 - **⚙️ Single Configuration File** — every knob is controlled via a clean `config.toml`
-- **🤫 Silent Debugging** — detailed debug output is written only to the log file, never to the console
 
 ## 📦 Installation
 
