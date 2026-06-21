@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-linux:
-    runs-on: debian-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
