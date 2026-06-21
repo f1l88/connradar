@@ -20,34 +20,37 @@
 git clone https://github.com/f1l88/connradar.git
 cd connradar
 cargo build --release
+```
 The binary will be located at target/release/connradar (or connradar.exe on Windows).
 
-Via Cargo (once published)
-bash
-cargo install connradar
-🚀 Quick Start
+## 🚀 Quick Start
 Run ConnRadar for the first time to generate a default configuration file:
 
-bash
+```bash
 connradar --config my_config.toml
+```
+
 If the file doesn’t exist, it will be created with sensible defaults.
 
 Edit my_config.toml to match your needs (see the configuration section below).
 
 Start monitoring:
 
-bash
+```bash
 connradar --config my_config.toml
-Watch the radar in action:
+```
+## Watch the radar in action:
 
-text
+```text
 [INFO] Starting Connection Monitor
 [INFO] Check interval: 10s, Alert interval: 5min, Traffic type: All
 [INFO] Iteration 1: Active=12, New=3, Disappeared=1, History=15
-⚙️ Configuration
+```
+
+## ⚙️ Configuration
 All settings live in a single TOML file. Here is an annotated example:
 
-toml
+```toml
 [monitor]
 alert_interval_minutes = 5        # how often to repeat alerts (minutes)
 check_interval_seconds = 10       # connection poll interval (seconds)
@@ -78,10 +81,12 @@ enable_log_alerts = true
 alert_on_new_connection = false   # fire an alert for every new connection
 alert_on_disconnection = true     # fire an alert when a connection disappears
 alert_threshold_count = 100       # if set, alert when total connections exceed this
-📊 Sample Report
+```
+
+## 📊 Sample Report
 When reports are enabled, ConnRadar produces a file like this:
 
-text
+```text
 Connection Monitor Report
 Generated: 2026-06-21 14:35:00
 
@@ -94,23 +99,23 @@ Statistics:
 Current Active Connections:
   - 93.184.216.34:80 [TCP] Direction: outgoing (Local: 192.168.1.5:54321)
   ...
-🧪 Testing
+```
+
+## 🧪 Testing
 Run the unit tests with:
 
-bash
+```bash
 cargo test
-🛠 Technology Stack
+```
+
+## 🛠 Technology Stack
 Rust — speed and memory safety
-
 TOML — configuration format
-
 serde / serde_json — serialization
-
 chrono — timestamps
-
 tracing (optional) — structured logging
 
-📄 License
+## 📄 License
 This project is licensed under the MIT License. See LICENSE for details.
 
 ConnRadar — know what’s happening on your network at every moment.
