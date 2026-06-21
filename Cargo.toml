@@ -1,0 +1,18 @@
+[package]
+name = "connradar"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+config = "0.13"
+toml = "0.8"
+anyhow = "1.0.102"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.22"
+
+[[bin]]
+name = "connradar"
+path = "src/main.rs"

@@ -1,0 +1,20 @@
+# Скомпилированные файлы
+/target/
+
+# Файлы редакторов
+.vscode/
+.idea/
+
+# Файлы конфигурации с локальными изменениями
+config.toml
+
+# Логи и данные, генерируемые программой
+*.log
+connections.jsonl
+report.txt
+connection_report.txt
+test.md
+
+# Файлы ОС
+.DS_Store
+Thumbs.db
