@@ -10,10 +10,15 @@ use super::*;
                 export_report_interval: 300,
                 traffic_type: TrafficType::All,
                 debug: false,
+                resolve_dns: true,
+                dns_timeout_ms: 1500,
+                resolve_only_private: true,
+                group_by_ip: true,
             },
             filtering: FilteringConfig {
                 ignore_ips: vec![],
                 ignore_private_ips: false,
+                ignore_public_ips: false,
                 ignore_localhost: false,
                 ignore_ports: vec![],
                 monitor_only_ports: None,
@@ -175,7 +180,7 @@ use super::*;
         assert_eq!(dir, ConnectionDirection::Unknown);
     }
 
-    // Тесты is_private_ip
+    // Test is_private_ip
     #[test]
     fn test_is_private_ipv4() {
         assert!(ConnectionMonitor::is_private_ip("192.168.1.1"));
