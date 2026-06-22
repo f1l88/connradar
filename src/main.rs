@@ -11,6 +11,7 @@ use std::net::IpAddr;
 use config::{Config, ConfigError, File as ConfigFile};
 use std::env;
 use dns_lookup::lookup_addr;
+use ipnet::IpNet;
 //use tracing::{info, warn, error};
 
 #[cfg(test)]
@@ -51,6 +52,8 @@ struct MonitorConfig {
     pub dns_timeout_ms: u64,         // timeout
     pub resolve_only_private: bool,
     pub group_by_ip: bool,  // true – группировать по IP, false – отслеживать IP:port
+    pub show_ports_in_logs: bool,
+    pub include_ports_in_history: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -60,8 +63,9 @@ struct FilteringConfig {
     ignore_public_ips: bool,
     ignore_localhost: bool,
     ignore_ports: Vec<u16>,
-    monitor_only_ports: Option<Vec<u16>>,
-    allowed_subnets: Option<Vec<String>>,
+    #[serde(deserialize_with = "deserialize_empty_vec_as_none")]
+    pub monitor_only_ports: Option<Vec<u16>>,
+    pub allowed_subnets: Option<Vec<String>>,
     ignore_ipv6: bool,
 }
 
@@ -100,6 +104,8 @@ impl AppConfig {
             .set_default("monitor.dns_timeout_ms", 2000)?
             .set_default("monitor.resolve_only_private", true)?
             .set_default("monitor.group_by_ip", true)?
+            .set_default("monitor.show_ports_in_logs", true)?
+            .set_default("monitor.include_ports_in_history", true)?
 
             .set_default("filtering.ignore_private_ips", true)?
             .set_default("filtering.ignore_public_ips", false)?
@@ -178,7 +184,8 @@ struct ParsedConnection {
 struct Connection {
     pub ip_address: String,
     pub hostname: Option<String>, 
-    pub ports: Vec<PortInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<PortInfo>>,
     pub discovered_at: String,
     pub last_seen: String,
     pub protocol: String,
@@ -200,6 +207,17 @@ struct Logger {
     enable_logging: bool,
     max_size_mb: u64,
     max_files: usize,
+}
+
+fn deserialize_empty_vec_as_none<'de, D>(deserializer: D) -> Result<Option<Vec<u16>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<Vec<u16>>::deserialize(deserializer)?;
+    match opt {
+        Some(v) if v.is_empty() => Ok(None),
+        other => Ok(other),
+    }
 }
 
 impl Logger {
@@ -303,6 +321,22 @@ impl Logger {
         file.write_all(log_message.as_bytes())?;
         Ok(())
     }
+}
+
+/// Проверяет, входит ли IP-адрес хотя бы в одну из указанных подсетей (CIDR).
+fn ip_in_any_subnet(ip: &str, subnets: &[String]) -> bool {
+    let ip = match ip.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip,
+        Err(_) => return false,
+    };
+    for subnet_str in subnets {
+        if let Ok(subnet) = subnet_str.parse::<IpNet>() {
+            if subnet.contains(&ip) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[derive(Debug)]
@@ -430,7 +464,11 @@ impl ConnectionMonitor {
     fn save_all_history(&self) -> std::io::Result<()> {
         let mut file = File::create(&self.config.files.data_file)?;
         for conn in &self.history {
-            let json = serde_json::to_string(conn)?;
+            let mut export_conn = conn.clone();
+            if !self.config.monitor.include_ports_in_history {
+                export_conn.ports = vec![].into();
+            }
+            let json = serde_json::to_string(&export_conn)?;
             writeln!(file, "{}", json)?;
         }
         Ok(())
@@ -469,6 +507,13 @@ impl ConnectionMonitor {
         // Ignore publiic ips address
         if self.config.filtering.ignore_public_ips && !Self::is_private_ip(ip) {
             return true;
+        }
+
+        // Проверка allowed_subnets (белый список)
+        if let Some(ref subnets) = self.config.filtering.allowed_subnets {
+            if !subnets.is_empty() && !ip_in_any_subnet(ip, subnets) {
+                return true;
+            }
         }
         
         false
@@ -904,18 +949,16 @@ impl ConnectionMonitor {
     fn check_connections(&mut self) -> Result<(Vec<String>, Vec<String>), Box<dyn std::error::Error>> {
         let current = self.get_current_connections()?;
 
-        // Теперь ключ — только IP (группировка по хосту)
+        // Ключ – только IP (группировка по хосту)
         let current_set: HashSet<String> = current.iter()
             .map(|conn| conn.remote_ip.clone())
             .collect();
 
-        // Исчезнувшие IP (те, что были раньше, но сейчас не обнаружены)
         let disappeared: Vec<String> = self.current_connections
             .difference(&current_set)
             .cloned()
             .collect();
 
-        // Новые IP (те, что появились)
         let new_connections: Vec<String> = current_set
             .difference(&self.current_connections)
             .cloned()
@@ -924,41 +967,47 @@ impl ConnectionMonitor {
         // Логируем новые соединения
         if self.config.alerts.alert_on_new_connection {
             for ip in &new_connections {
-                // Ищем сохранённую запись по IP в истории (после обновления)
                 if let Some(saved_conn) = self.history.iter().find(|c| &c.ip_address == ip) {
                     let hostname_str = saved_conn.hostname.as_deref().unwrap_or("N/A");
-                    // Покажем все порты для этого хоста
-                    let ports_str: Vec<String> = saved_conn.ports.iter()
-                        .map(|p| format!("{} ({})", p.port, p.state))
-                        .collect();
+                    let ports_part = if self.config.monitor.show_ports_in_logs {
+                        if let Some(ref ports) = saved_conn.ports {
+                            let ports_desc: Vec<String> = ports.iter()
+                                .map(|p| format!("{} ({})", p.port, p.state))
+                                .collect();
+                            format!(" | Ports: {}", ports_desc.join(", "))
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
                     let _ = self.logger.info(&format!(
-                        "New connection(s) from {} ({}) | Ports: {} | Direction: {}",
-                        ip, hostname_str, ports_str.join(", "), saved_conn.direction
+                        "New connection(s) from {} ({}){} | Direction: {}",
+                        ip, hostname_str, ports_part, saved_conn.direction
                     ));
                 }
             }
         }
 
-        // Обновляем текущие соединения
         self.current_connections = current_set;
 
-        // Добавляем/обновляем историю
         let now = Local::now().to_rfc3339();
         for conn in &current {
             let ip = &conn.remote_ip;
             if let Some(existing) = self.history.iter_mut().find(|c| c.ip_address == *ip) {
-                // Обновляем last_seen
                 existing.last_seen = now.clone();
-                // Добавляем порт, если его ещё нет
-                if !existing.ports.iter().any(|p| p.port == conn.remote_port) {
-                    existing.ports.push(PortInfo {
-                        port: conn.remote_port.clone(),
-                        state: conn.state.clone(),
-                    });
-                } else {
-                    // Можно обновить состояние у существующего порта
-                    if let Some(p) = existing.ports.iter_mut().find(|p| p.port == conn.remote_port) {
-                        p.state = conn.state.clone();
+
+                // Если включено сохранение портов в истории – обновляем их
+                if self.config.monitor.include_ports_in_history {
+                    if let Some(ref mut ports) = existing.ports {
+                        if !ports.iter().any(|p| p.port == conn.remote_port) {
+                            ports.push(PortInfo {
+                                port: conn.remote_port.clone(),
+                                state: conn.state.clone(),
+                            });
+                        } else if let Some(p) = ports.iter_mut().find(|p| p.port == conn.remote_port) {
+                            p.state = conn.state.clone();
+                        }
                     }
                 }
             } else {
@@ -968,13 +1017,23 @@ impl ConnectionMonitor {
                     ConnectionDirection::Unknown => "unknown",
                 };
                 let hostname = self.resolve_hostname(&conn.remote_ip);
+
+                let _ports = if self.config.monitor.include_ports_in_history {
+                    Some(vec![PortInfo {
+                        port: conn.remote_port.clone(),
+                        state: conn.state.clone(),
+                    }])
+                } else {
+                    None
+                };
+
                 let saved_conn = Connection {
                     ip_address: ip.clone(),
                     hostname,
-                    ports: vec![PortInfo {
+                    ports: Some(vec![PortInfo {
                         port: conn.remote_port.clone(),
                         state: conn.state.clone(),
-                    }],
+                    }]),
                     discovered_at: now.clone(),
                     last_seen: now.clone(),
                     protocol: conn.protocol.clone(),
@@ -986,6 +1045,7 @@ impl ConnectionMonitor {
             }
         }
 
+        // Сохраняем всю историю в файл
         self.save_all_history()?;
 
         Ok((new_connections, disappeared))
@@ -1029,7 +1089,7 @@ impl ConnectionMonitor {
         let mut file = File::create(&self.config.files.report_file)?;
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
 
-        // Группируем историю по IP (собираем все записи для одного адреса)
+        // Группируем историю по IP
         let mut ip_map: std::collections::HashMap<String, Vec<&Connection>> = std::collections::HashMap::new();
         for conn in &self.history {
             ip_map.entry(conn.ip_address.clone()).or_default().push(conn);
@@ -1040,7 +1100,6 @@ impl ConnectionMonitor {
         writeln!(file, "Configuration: {}", self.config.files.config_file)?;
         writeln!(file, "Traffic type: {:?}", self.config.monitor.traffic_type)?;
 
-        // Статистика по направлениям
         let incoming_count = ip_map.values()
             .filter(|v| v.iter().any(|c| c.direction == "incoming"))
             .count();
@@ -1061,7 +1120,6 @@ impl ConnectionMonitor {
         writeln!(file, "\nActive Hosts:")?;
 
         for (ip, connections) in &ip_map {
-            // Пропускаем неактивные IP
             if !self.current_connections.contains(ip) {
                 continue;
             }
@@ -1078,14 +1136,15 @@ impl ConnectionMonitor {
             writeln!(file, "    Direction: {}", latest.direction)?;
             writeln!(file, "    Last seen: {}", latest.last_seen)?;
 
-            // Собираем уникальные порты и состояния из всех записей этого IP
-            let mut port_state_pairs: Vec<String> = connections.iter()
-                .flat_map(|c| c.ports.iter())              // Vec<&PortInfo>
-                .map(|p| format!("{} ({})", p.port, p.state))
-                .collect();
-            port_state_pairs.sort();
-            port_state_pairs.dedup();
-            writeln!(file, "    Ports: {}", port_state_pairs.join(", "))?;
+            // Показываем порты, только если они есть в истории (include_ports_in_history = true)
+            if let Some(ref ports) = latest.ports {
+                if !ports.is_empty() {
+                    let port_desc: Vec<String> = ports.iter()
+                        .map(|p| format!("{} ({})", p.port, p.state))
+                        .collect();
+                    writeln!(file, "    Ports: {}", port_desc.join(", "))?;
+                }
+            }
         }
 
         Ok(())
@@ -1187,17 +1246,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok((new, disappeared)) => {
                     if mon.config.alerts.alert_on_disconnection {
                         for ip in &disappeared {
-                            // Ищем запись по IP (ключ теперь только IP)
                             if let Some(conn) = mon.history.iter().find(|c| c.ip_address == *ip) {
-                                let ports_desc: Vec<String> = conn.ports.iter()
-                                    .map(|p| format!("{} ({})", p.port, p.state))
-                                    .collect();
+                                // Собираем описание портов только если включена опция
+                                let ports_part = if mon.config.monitor.show_ports_in_logs {
+                                if let Some(ref ports) = conn.ports {
+                                    let desc: Vec<String> = ports.iter()
+                                        .map(|p| format!("{} ({})", p.port, p.state))
+                                        .collect();
+                                    format!(" | Ports: {}", desc.join(", "))
+                                } else {
+                                    String::new()
+                                }
+                            } else {
+                                String::new()
+                            };
+
                                 let message = format!(
-                                    "Connection disappeared: {} [{}] | Direction: {} | Ports: {} | First seen: {}",
+                                    "Connection disappeared: {} [{}] | Direction: {}{} | First seen: {}",
                                     conn.ip_address,
                                     conn.protocol,
                                     conn.direction,
-                                    ports_desc.join(", "),
+                                    ports_part,
                                     conn.discovered_at
                                 );
                                 mon.send_alert(&message);

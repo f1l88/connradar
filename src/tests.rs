@@ -14,6 +14,8 @@ use super::*;
                 dns_timeout_ms: 1500,
                 resolve_only_private: true,
                 group_by_ip: true,
+                show_ports_in_logs: false,
+                include_ports_in_history: false,
             },
             filtering: FilteringConfig {
                 ignore_ips: vec![],
